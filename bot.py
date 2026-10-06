@@ -1,262 +1,443 @@
 import os
 import json
-from telegram import Update
+import urllib.parse
+import urllib.request
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
-from urllib.parse import quote
-from urllib.request import urlopen
-import json
+from telegram.error import TelegramError
+
 
 # =========================
 # SOZLAMALAR
 # =========================
 
 TOKEN = os.environ["TOKEN"]
-
 OMDB_API_KEY = os.environ["OMDB_API_KEY"]
 
-# Bu yerga o'zingizning Telegram ID'ingizni yozing
-ADMIN_ID = 5559820565
+ADMIN_ID = 555938273
 
-# Kino ma'lumotlari shu lug'atda saqlanadi
+# Majburiy obuna kanali
+FORCE_CHANNEL = "@rasmiykinouz"
+FORCE_CHANNEL_URL = "https://t.me/rasmiykinouz"
+
 MOVIES_FILE = "movies.json"
 
+
+# =========================
+# KINOLAR BAZASI
+# =========================
+
 if os.path.exists(MOVIES_FILE):
-    with open(MOVIES_FILE, "r", encoding="utf-8") as f:
-        movies = json.load(f)
+    try:
+        with open(MOVIES_FILE, "r", encoding="utf-8") as f:
+            movies = json.load(f)
+    except Exception:
+        movies = {}
 else:
     movies = {}
 
+
+# Admin kino yuklagandan keyin kod kutish
+waiting_for_code = False
+pending_movie = None
+
+
 # =========================
-# /start
+# MAJBURIY OBUNA
+# =========================
+
+async def is_subscribed(bot, user_id):
+    """
+    Foydalanuvchi kanalga obuna bo'lganligini tekshiradi.
+    """
+
+    try:
+        member = await bot.get_chat_member(
+            chat_id=FORCE_CHANNEL,
+            user_id=user_id
+        )
+
+        if member.status in ("member", "administrator", "creator"):
+            return True
+
+        # Ba'zi holatlarda restricted bo'lishi mumkin
+        if member.status == "restricted":
+            return getattr(member, "is_member", False)
+
+        return False
+
+    except TelegramError:
+        return False
+
+
+def subscription_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📢 Kanalga obuna bo‘lish",
+                url=FORCE_CHANNEL_URL
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ Obunani tekshirish",
+                callback_data="check_subscription"
+            )
+        ]
+    ])
+
+
+async def require_subscription(update, context):
+    """
+    Obuna bo'lmagan foydalanuvchini to'xtatadi.
+    Admin uchun obuna tekshirilmaydi.
+    """
+
+    user = update.effective_user
+
+    # Admin uchun majburiy obuna yo'q
+    if user and user.id == ADMIN_ID:
+        return True
+
+    if user and await is_subscribed(context.bot, user.id):
+        return True
+
+    message = update.effective_message
+
+    if message:
+        await message.reply_text(
+            "🔒 Botdan foydalanish uchun avval kanalimizga obuna bo‘ling!\n\n"
+            "1️⃣ Kanalga obuna bo‘ling\n"
+            "2️⃣ «✅ Obunani tekshirish» tugmasini bosing",
+            reply_markup=subscription_keyboard()
+        )
+
+    return False
+
+
+# =========================
+# /START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not await require_subscription(update, context):
+        return
+
     await update.message.reply_text(
-        "🎬 Assalomu alaykum!\n\n"
-        "Kino topish uchun kino nomini yoki kino kodini yuboring.\n\n"
-        "Masalan:\n"
-        "🎥 Avatar\n"
-        "yoki\n"
-        "🔢 060"
+        "🎬 Kino botga xush kelibsiz!\n\n"
+        "Kino kodini yuboring.\n"
+        "Masalan: 060\n\n"
+        "Yoki kino nomini yozing."
     )
 
+
 # =========================
-# ADMIN KINO QO'SHISH
+# OBUNANI TEKSHIRISH TUGMASI
+# =========================
+
+async def check_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    if await is_subscribed(context.bot, user_id):
+
+        await query.message.edit_text(
+            "✅ Obuna tasdiqlandi!\n\n"
+            "🎬 Endi kino kodini yoki kino nomini yuboring."
+        )
+
+    else:
+
+        await query.answer(
+            "❌ Siz hali kanalga obuna bo‘lmagansiz!",
+            show_alert=True
+        )
+
+
+# =========================
+# ADMIN KINO YUKLASH
 # =========================
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    global waiting_for_code
+    global pending_movie
+
+    # Faqat admin kino yuklay oladi
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text(
-            "❌ Sizda kino qo'shish huquqi yo'q."
+            "❌ Bu funksiya faqat admin uchun."
         )
         return
 
-    if not update.message.video:
+    file_id = None
+    file_type = None
+
+    # Video
+    if update.message.video:
+
+        file_id = update.message.video.file_id
+        file_type = "video"
+
+    # Document orqali video
+    elif update.message.document:
+
+        file_id = update.message.document.file_id
+        file_type = "document"
+
+    if not file_id:
         return
 
-    context.user_data["waiting_for_code"] = True
-    context.user_data["video_file_id"] = update.message.video.file_id
+    pending_movie = {
+        "file_id": file_id,
+        "type": file_type
+    }
+
+    waiting_for_code = True
 
     await update.message.reply_text(
-        "✅ Kino qabul qilindi!\n\n"
+        "🎬 Kino qabul qilindi!\n\n"
         "🔢 Endi kino uchun kod yuboring.\n"
         "Masalan: 060"
     )
 
+
 # =========================
-# KOD QABUL QILISH
+# KOD / KINO NOMI
 # =========================
 
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_id = update.effective_user.id
+    global waiting_for_code
+    global pending_movie
+
     text = update.message.text.strip()
 
-    # Admin kino uchun kod berayotgan bo'lsa
-    if (
-        user_id == ADMIN_ID
-        and context.user_data.get("waiting_for_code")
-    ):
+    # =====================
+    # ADMIN KOD BERAYOTGAN BO'LSA
+    # =====================
 
-        file_id = context.user_data.get("video_file_id")
+    if update.effective_user.id == ADMIN_ID and waiting_for_code:
 
-        if not file_id:
+        code = text
+
+        if not code:
             return
 
-        movies[text] = file_id
+        movies[code] = pending_movie
 
         with open(MOVIES_FILE, "w", encoding="utf-8") as f:
-            json.dump(movies, f, ensure_ascii=False, indent=2)
+            json.dump(
+                movies,
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
 
-        context.user_data["waiting_for_code"] = False
-        context.user_data["video_file_id"] = None
+        waiting_for_code = False
+        pending_movie = None
+
         await update.message.reply_text(
-            f"✅ Kino muvaffaqiyatli saqlandi!\n\n"
-            f"🔢 Kod: {text}\n\n"
-            f"Endi foydalanuvchi {text} kodini yuborsa,\n"
-            f"shu kino yuboriladi. 🎬"
+            f"✅ Kino saqlandi!\n\n"
+            f"🔢 Kodi: `{code}`",
+            parse_mode="Markdown"
         )
 
         return
 
-    # =========================
-    # KINO KODI ORQALI QIDIRISH
-    # =========================
+    # =====================
+    # MAJBURIY OBUNA
+    # =====================
+
+    if not await require_subscription(update, context):
+        return
+
+    # =====================
+    # KOD ORQALI KINO
+    # =====================
 
     if text in movies:
 
-        await update.message.reply_video(
-            video=movies[text],
-            caption=f"🎬 Kino kodi: {text}"
-        )
+        movie = movies[text]
 
-        return
+        # Eski formatdagi movies.json bilan moslik
+        if isinstance(movie, str):
 
-    # =========================
-    # OMDB ORQALI KINO QIDIRISH
-    # =========================
-
-    await update.message.reply_text(
-        "🔎 Kino qidirilmoqda..."
-    )
-
-    url = (
-        "https://www.omdbapi.com/"
-        "?apikey=" + OMDB_API_KEY +
-        "&s=" + quote(text)
-    )
-
-    try:
-
-        with urlopen(url, timeout=10) as response:
-            data = json.loads(
-                response.read().decode()
+            await update.message.reply_video(
+                video=movie,
+                caption=f"🎬 Kino kodi: {text}"
             )
 
-        if data.get("Response") == "True":
+            return
 
-            movies_list = data.get("Search", [])[:5]
+        file_id = movie.get("file_id")
+        file_type = movie.get("type", "video")
 
-            result = "🎬 Topilgan kinolar:\n\n"
+        if file_type == "document":
 
-            for movie in movies_list:
-
-                title = movie.get(
-                    "Title",
-                    "Noma'lum"
-                )
-
-                year = movie.get(
-                    "Year",
-                    "Noma'lum"
-                )
-
-                movie_type = movie.get(
-                    "Type",
-                    "Noma'lum"
-                )
-
-                result += (
-                    f"🎥 {title}\n"
-                    f"📅 Yil: {year}\n"
-                    f"🎞 Turi: {movie_type}\n\n"
-                )
-
-            await update.message.reply_text(
-                result
+            await update.message.reply_document(
+                document=file_id,
+                caption=f"🎬 Kino kodi: {text}"
             )
 
         else:
 
+            await update.message.reply_video(
+                video=file_id,
+                caption=f"🎬 Kino kodi: {text}"
+            )
+
+        return
+
+    # =====================
+    # OMDBDAN QIDIRISH
+    # =====================
+
+    try:
+
+        params = urllib.parse.urlencode({
+            "apikey": OMDB_API_KEY,
+            "s": text,
+            "type": "movie"
+        })
+
+        url = f"https://www.omdbapi.com/?{params}"
+
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        if data.get("Response") != "True":
+
             await update.message.reply_text(
                 "❌ Kino topilmadi."
             )
+            return
 
-    except Exception as error:
+        results = data.get("Search", [])
 
-        print("Xatolik:", error)
+        if not results:
+
+            await update.message.reply_text(
+                "❌ Kino topilmadi."
+            )
+            return
+
+        message = "🔎 Topilgan kinolar:\n\n"
+
+        for movie in results[:10]:
+
+            title = movie.get("Title", "Noma'lum")
+            year = movie.get("Year", "Noma'lum")
+            imdb_id = movie.get("imdbID", "")
+
+            message += (
+                f"🎬 {title}\n"
+                f"📅 {year}\n"
+                f"🆔 {imdb_id}\n\n"
+            )
+
+        await update.message.reply_text(message)
+
+    except Exception as e:
+
+        print("OMDb xatosi:", e)
 
         await update.message.reply_text(
             "⚠️ Kino qidirishda xatolik yuz berdi."
         )
 
+
 # =========================
-# ADMIN KINO O'CHIRISH
+# /DELETE
 # =========================
 
-async def delete_movie(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def delete_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text(
-            "❌ Siz admin emassiz."
+            "❌ Bu buyruq faqat admin uchun."
         )
         return
 
     if not context.args:
 
         await update.message.reply_text(
-            "Foydalanish:\n"
-            "/delete 060"
+            "❗ Misol:\n/delete 060"
         )
-
         return
 
     code = context.args[0]
 
-    if code in movies:
-
-        del movies[code]
+    if code not in movies:
 
         await update.message.reply_text(
-            f"🗑 Kino o'chirildi.\n"
-            f"🔢 Kod: {code}"
+            "❌ Bunday kod mavjud emas."
+        )
+        return
+
+    del movies[code]
+
+    # O'chirilgan kino bazadan ham o'chiriladi
+    with open(MOVIES_FILE, "w", encoding="utf-8") as f:
+        json.dump(
+            movies,
+            f,
+            ensure_ascii=False,
+            indent=2
         )
 
-    else:
+    await update.message.reply_text(
+        f"✅ `{code}` kodi o‘chirildi.",
+        parse_mode="Markdown"
+    )
 
-        await update.message.reply_text(
-            "❌ Bunday koddagi kino topilmadi."
-        )
 
 # =========================
-# ADMIN KINOLAR RO'YXATI
+# /LIST
 # =========================
 
-async def movie_list(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def list_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text(
-            "❌ Siz admin emassiz."
+            "❌ Bu buyruq faqat admin uchun."
         )
         return
 
     if not movies:
 
         await update.message.reply_text(
-            "📂 Hozircha kino qo'shilmagan."
+            "📂 Kino bazasi hozircha bo‘sh."
         )
-
         return
 
-    text = "🎬 Saqlangan kinolar:\n\n"
+    text = "📂 Kino kodlari:\n\n"
 
     for code in movies:
-        text += f"🔢 {code}\n"
+        text += f"🎬 `{code}`\n"
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown"
+    )
+
 
 # =========================
 # BOTNI ISHGA TUSHIRISH
@@ -266,25 +447,38 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
+    # /start
     app.add_handler(
         CommandHandler("start", start)
     )
 
+    # /delete
     app.add_handler(
         CommandHandler("delete", delete_movie)
     )
 
+    # /list
     app.add_handler(
-        CommandHandler("list", movie_list)
+        CommandHandler("list", list_movies)
     )
 
+    # Obunani tekshirish tugmasi
+    app.add_handler(
+        CallbackQueryHandler(
+            check_subscription,
+            pattern="^check_subscription$"
+        )
+    )
+
+    # Video/document qabul qilish
     app.add_handler(
         MessageHandler(
-            filters.VIDEO,
+            filters.VIDEO | filters.Document.ALL,
             handle_video
         )
     )
 
+    # Oddiy matnlar
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -292,7 +486,7 @@ def main():
         )
     )
 
-    print("🤖 Bot ishga tushdi...")
+    print("🤖 Kino bot ishga tushdi...")
 
     app.run_polling()
 
