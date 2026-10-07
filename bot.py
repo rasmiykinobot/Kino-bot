@@ -289,6 +289,7 @@ admin_action = None
 def admin_keyboard():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Kanal qo‘shish", callback_data="admin_add")],
+        [InlineKeyboardButton("🔒 Private kanal qo‘shish", callback_data="admin_add_private")],
         [InlineKeyboardButton("🗑 Kanal o‘chirish", callback_data="admin_remove")],
         [InlineKeyboardButton("📋 Kanallar", callback_data="admin_list")],
     ])
@@ -325,6 +326,15 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Kanal username'ini yuboring.\n"
             "Masalan:\n"
             "@kanal_username"
+        )
+
+    elif query.data == "admin_add_private":
+        admin_action = "add_private"
+        await query.message.reply_text(
+            "🔒 Private kanal qo‘shish\n\n"
+            "Private kanal ID raqamini yuboring.\n"
+            "Masalan:\n"
+            "-1003851852666"
         )
 
     elif query.data == "admin_remove":
@@ -368,7 +378,76 @@ async def admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_code(update, context)
         return
 
-    if admin_action == "add":
+    if admin_action == "add_private":
+        try:
+            chat_id = int(update.message.text.strip())
+
+            if not str(chat_id).startswith("-100"):
+                await update.message.reply_text(
+                    "❌ Private kanal ID odatda -100 bilan boshlanadi.\n"
+                    "Masalan: -1003851852666"
+                )
+                return
+
+            chat = await context.bot.get_chat(chat_id)
+
+            context.user_data["private_channel_id"] = chat_id
+            admin_action = "add_private_link"
+
+            await update.message.reply_text(
+                f"✅ Kanal topildi!\n\n"
+                f"📢 Nomi: {chat.title}\n"
+                f"🆔 ID: {chat.id}\n\n"
+                "🔗 Endi private kanalning invite linkini yuboring.\n"
+                "Masalan:\n"
+                "https://t.me/+O5iEEvhNoO1jZjE6"
+            )
+
+        except (ValueError, TelegramError):
+            await update.message.reply_text(
+                "❌ Kanalni topib bo‘lmadi.\n"
+                "ID to‘g‘ri ekanini va bot private kanalga admin ekanini tekshiring."
+            )
+
+    elif admin_action == "add_private_link":
+        link = update.message.text.strip()
+        chat_id = context.user_data.get("private_channel_id")
+
+        if not link.startswith("https://t.me/+"):
+            await update.message.reply_text(
+                "❌ Invite link noto‘g‘ri.\n"
+                "Masalan: https://t.me/+O5iEEvhNoO1jZjE6"
+            )
+            return
+
+        chat = await context.bot.get_chat(chat_id)
+
+        channel = {
+            "chat_id": chat_id,
+            "name": chat.title or "Private kanal",
+            "url": link
+        }
+
+        if any(str(c["chat_id"]) == str(chat_id) for c in channels):
+            await update.message.reply_text("⚠️ Bu kanal allaqachon qo‘shilgan.")
+            admin_action = None
+            context.user_data.pop("private_channel_id", None)
+            return
+
+        channels.append(channel)
+        save_channels(channels)
+
+        admin_action = None
+        context.user_data.pop("private_channel_id", None)
+
+        await update.message.reply_text(
+            f"✅ Private kanal qo‘shildi!\n\n"
+            f"📢 {channel['name']}\n"
+            f"🆔 {channel['chat_id']}\n"
+            f"🔗 {channel['url']}"
+        )
+
+    elif admin_action == "add":
         chat_id = update.message.text.strip()
 
         if not chat_id.startswith("@"):
