@@ -255,6 +255,31 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 # =========================
+# PRIVATE CHANNEL ID
+# =========================
+
+async def private_channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or update.effective_user.id != ADMIN_ID:
+        return
+
+    message = update.effective_message
+    origin = getattr(message, "forward_origin", None)
+
+    if origin and getattr(origin, "type", None) == "channel":
+        chat = origin.chat
+
+        await message.reply_text(
+            f"🔒 PRIVATE KANAL MA'LUMOTI\\n\\n"
+            f"📢 Nomi: {chat.title}\\n"
+            f"🆔 ID: {chat.id}\\n"
+            f"🔗 Username: @{chat.username}" if chat.username else
+            f"🔒 PRIVATE KANAL MA'LUMOTI\\n\\n"
+            f"📢 Nomi: {chat.title}\\n"
+            f"🆔 ID: {chat.id}\\n"
+            f"🔗 Username: mavjud emas"
+        )
+
+# =========================
 # ADMIN PANEL
 # =========================
 
@@ -652,12 +677,22 @@ def main():
         )
     )
 
+    # Private kanal ID sini olish
+    app.add_handler(
+        MessageHandler(
+            filters.User(user_id=ADMIN_ID) & filters.ALL,
+            private_channel_id
+        ),
+        group=0
+    )
+
     # Admin paneldagi matnlar
     app.add_handler(
         MessageHandler(
             filters.User(user_id=ADMIN_ID) & filters.TEXT & ~filters.COMMAND,
             admin_text
-        )
+        ),
+        group=1
     )
 
     # /delete
