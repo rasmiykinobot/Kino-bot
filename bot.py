@@ -108,6 +108,28 @@ async def is_subscribed(bot, user_id):
 
     return True
 
+def subscription_keyboard():
+    buttons = []
+
+    for channel in channels:
+        buttons.append([
+            InlineKeyboardButton(
+                f"📢 {channel['name']}",
+                url=channel["url"]
+            )
+        ])
+
+    buttons.append([
+        InlineKeyboardButton(
+            "✅ Obunani tekshirish",
+            callback_data="check_subscription"
+        )
+    ])
+
+    return InlineKeyboardMarkup(buttons)
+
+
+
 async def require_subscription(update, context):
     """
     Obuna bo'lmagan foydalanuvchini to'xtatadi.
