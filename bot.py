@@ -236,9 +236,14 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not file_id:
         return
 
+    # Video bilan birga yuborilgan tavsifni ham saqlash
+    caption = update.message.caption or ""
+
     pending_movie = {
         "file_id": file_id,
-        "type": file_type
+        "type": file_type,
+        "caption": caption,
+        "downloads": 0
     }
 
     waiting_for_code = True
@@ -580,16 +585,28 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_id = movie.get("file_id")
         file_type = movie.get("type", "video")
 
+        # Asl tavsif, kino kodi va yuklash hisoblagichi
+        description = movie.get("caption", "").strip()
+        info = f"🎬 Kino kodi: {text}\n🗂 Yuklash: {count + 1}"
+
+        if description:
+            caption = f"{description}\n\n{info}"
+        else:
+            caption = info
+
+        # Telegram caption chegarasidan oshib ketmasin
+        caption = caption[:1024]
+
         # Kinoni yuborish
         if file_type == "document":
             await update.message.reply_document(
                 document=file_id,
-                caption=f"🎬 Kino kodi: {text}\n🗂 Yuklash: {count + 1}"
+                caption=caption
             )
         else:
             await update.message.reply_video(
                 video=file_id,
-                caption=f"🎬 Kino kodi: {text}\n🗂 Yuklash: {count + 1}"
+                caption=caption
             )
 
         # Faqat muvaffaqiyatli yuborilgandan keyin saqlash
