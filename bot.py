@@ -801,7 +801,8 @@ def main():
         MessageHandler(
             filters.VIDEO | filters.Document.ALL,
             handle_video
-        )
+        ),
+        group=2
     )
 
     # Oddiy matnlar
