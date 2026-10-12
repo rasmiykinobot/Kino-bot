@@ -568,32 +568,36 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         movie = movies[text]
 
-        # Eski formatdagi movies.json bilan moslik
+        # Eski formatdagi kinoni yangi formatga o'tkazish
         if isinstance(movie, str):
+            movie = {
+                "file_id": movie,
+                "type": "video",
+                "downloads": 0
+            }
 
-            await update.message.reply_video(
-                video=movie,
-                caption=f"🎬 Kino kodi: {text}"
-            )
-
-            return
-
+        count = int(movie.get("downloads", 0))
         file_id = movie.get("file_id")
         file_type = movie.get("type", "video")
 
+        # Kinoni yuborish
         if file_type == "document":
-
             await update.message.reply_document(
                 document=file_id,
-                caption=f"🎬 Kino kodi: {text}"
+                caption=f"🎬 Kino kodi: {text}\n🗂 Yuklash: {count + 1}"
             )
-
         else:
-
             await update.message.reply_video(
                 video=file_id,
-                caption=f"🎬 Kino kodi: {text}"
+                caption=f"🎬 Kino kodi: {text}\n🗂 Yuklash: {count + 1}"
             )
+
+        # Faqat muvaffaqiyatli yuborilgandan keyin saqlash
+        movie["downloads"] = count + 1
+        movies[text] = movie
+
+        with open(MOVIES_FILE, "w", encoding="utf-8") as f:
+            json.dump(movies, f, ensure_ascii=False, indent=2)
 
         return
 
