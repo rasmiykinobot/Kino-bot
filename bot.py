@@ -34,6 +34,25 @@ FORCE_CHANNEL_URL = "https://t.me/rasmiykinouz"
 
 MOVIES_FILE = "movies.json"
 
+# Foydalanuvchilar bazasi
+USERS_FILE = "users.json"
+
+def load_users():
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_users(users):
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+users = load_users()
+
+
+
 CHANNELS_FILE = "channels.json"
 
 DEFAULT_CHANNEL = {
@@ -163,6 +182,15 @@ async def require_subscription(update, context):
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if user:
+        users[str(user.id)] = {
+            "id": user.id,
+            "first_name": user.first_name or "",
+            "username": user.username or ""
+        }
+        save_users(users)
 
     if not await require_subscription(update, context):
         return
@@ -297,6 +325,7 @@ def admin_keyboard():
         [InlineKeyboardButton("🔒 Private kanal qo‘shish", callback_data="admin_add_private")],
         [InlineKeyboardButton("🗑 Kanal o‘chirish", callback_data="admin_remove")],
         [InlineKeyboardButton("📋 Kanallar", callback_data="admin_list")],
+        [InlineKeyboardButton("👥 Foydalanuvchilar", callback_data="admin_users")],
     ])
 
 
@@ -324,7 +353,115 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.from_user.id != ADMIN_ID:
         return
 
-    if query.data == "admin_add":
+    if query.data == "admin_users":
+        if not users:
+            await query.message.reply_text(
+                "👥 Hozircha foydalanuvchilar ro'yxati bo'sh."
+            )
+            return
+
+        user_list = list(users.values())
+        total = len(user_list)
+        page_size = 10
+        page = 0
+
+        context.user_data["users_page"] = page
+
+        text = f"👥 JAMI FOYDALANUVCHILAR: {total}\n\n"
+
+        for item in user_list[:page_size]:
+            username = item.get("username", "")
+            username_text = f"@{username}" if username else "Username yo'q"
+            text += (
+                f"👤 {item.get('first_name', 'Nomsiz')}\n"
+                f"🆔 ID: {item.get('id', '')}\n"
+                f"🔗 {username_text}\n\n"
+            )
+
+        if total > page_size:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "➡️ Keyingi",
+                    callback_data="admin_users_next"
+                )]
+            ])
+            await query.message.reply_text(text, reply_markup=keyboard)
+        else:
+            await query.message.reply_text(text)
+
+    elif query.data == "admin_users_next":
+        user_list = list(users.values())
+        total = len(user_list)
+        page_size = 10
+        page = context.user_data.get("users_page", 0) + 1
+        start_index = page * page_size
+
+        if start_index >= total:
+            await query.answer("Boshqa foydalanuvchi yo'q.", show_alert=True)
+            return
+
+        context.user_data["users_page"] = page
+        text = f"👥 JAMI FOYDALANUVCHILAR: {total}\n"
+        for item in user_list[start_index:start_index + page_size]:
+            username = item.get("username", "")
+            username_text = f"@{username}" if username else "Username yo'q"
+            text += (
+                f"\n👤 {item.get('first_name', 'Nomsiz')}\n"
+                f"🆔 ID: {item.get('id', '')}\n"
+                f"🔗 {username_text}\n"
+            )
+
+        buttons = []
+        if page > 0:
+            buttons.append(InlineKeyboardButton(
+                "⬅️ Oldingi", callback_data="admin_users_prev"
+            ))
+        if start_index + page_size < total:
+            buttons.append(InlineKeyboardButton(
+                "➡️ Keyingi", callback_data="admin_users_next"
+            ))
+
+        await query.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([buttons]) if buttons else None
+        )
+
+    elif query.data == "admin_users_prev":
+        context.user_data["users_page"] = max(
+            0, context.user_data.get("users_page", 0) - 1
+        )
+        page = context.user_data["users_page"]
+        user_list = list(users.values())
+        total = len(user_list)
+        page_size = 10
+        start_index = page * page_size
+
+        text = f"👥 JAMI FOYDALANUVCHILAR: {total}\n"
+        for item in user_list[start_index:start_index + page_size]:
+            username = item.get("username", "")
+            username_text = f"@{username}" if username else "Username yo'q"
+            text += (
+                f"\n👤 {item.get('first_name', 'Nomsiz')}\n"
+                f"🆔 ID: {item.get('id', '')}\n"
+                f"🔗 {username_text}\n"
+            )
+
+        buttons = []
+        if page > 0:
+            buttons.append(InlineKeyboardButton(
+                "⬅️ Oldingi", callback_data="admin_users_prev"
+            ))
+        if start_index + page_size < total:
+            buttons.append(InlineKeyboardButton(
+                "➡️ Keyingi", callback_data="admin_users_next"
+            ))
+
+        await query.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup([buttons]) if buttons else None
+        )
+
+    elif query.data == "admin_add":
         admin_action = "add"
         await query.message.reply_text(
             "➕ Kanal qo‘shish\n\n"
